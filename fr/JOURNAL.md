@@ -43,8 +43,30 @@ Validation (`wordlist.rs`) :
 - Noms propres absents des deux lexiques admis s'ils sont attestés dans la presse (≥ 50 occurrences, majuscule ≥ 90 %) : 2 310 (`Netanyahu`, `Sonko`, `Xbox`…).
 - Correction : quand seule une casse rare était valide, elle héritait de toutes les occurrences de la clé (`CA` à f 182 avec les « ca » mis pour « ça ») ; elle ne garde plus que sa part (f 110).
 - Graphies à majuscule : la part des sous-titres est plafonnée à 4 fois celle de la presse et de Wikipédia (personnages de séries surreprésentés).
-- Formes fléchies des lemmes fréquents (≥ 1 ppm) absentes des corpus ajoutées depuis le Wiktionnaire, hors passé simple et subjonctif imparfait, vérifiées par Hunspell : 8 505 formes, fréquence 1.
+- Formes fléchies des lemmes fréquents (≥ 1 ppm) absentes des corpus ajoutées depuis le Wiktionnaire, hors passé simple et subjonctif imparfait (justification chiffrée plus bas), vérifiées par Hunspell : 8 505 formes, fréquence 1.
 - `ajouts.txt` : abréviations de messagerie (`mdr`, `stp`, `jsp`…) et élisions familières (`j'suis`) avec une fréquence minimale estimée.
 - Échelle des fréquences recalée sur celle des dictionnaires AOSP : 221 au maximum (au lieu de 254), ce qui laisse aux bigrammes leur marge jusqu'à 255.
 
 Résultat : 295 451 mots (dont 8 505 formes complétées), 538 014 bigrammes, `main_fr.dict` de 4,1 Mo ; ≈ 85 s sur 16 threads, 5 Go de RAM au maximum. Le dictionnaire couvre 131 702 des 190 425 mots du dictionnaire français d'HeliBoard (122 416 avant cette étape).
+
+## Morphalou (`morphalou.rs`)
+
+Morphalou 3.1 (ATILF, 976 570 formes, fusion de Morphalou 2, DELA, Dicollecte, Lefff et LGLex) évalué sur le dictionnaire précédent :
+
+- **Validation** : rien à gagner. Parmi les 3 000 premiers rejets, les 64 formes connues de Morphalou sont presque toutes de l'anglais (`happy`, `dog`, `sorry`, `because`, issues de DELA ou du Lefff) ou des fautes (`débarasser`).
+- **Noms et adjectifs** : les formes absentes, même acceptées par Hunspell, sont surtout des unités préfixées de Dicollecte (`zeptohenrys`, `picoseconde`) ; non retenu.
+- **Verbes** : le Wiktionnaire laisse des trous dans les conjugaisons (`espérerai`, `souviendrions`, `générerions`, `accélérerions`). Morphalou sert donc de seconde source de paradigmes pour la complétion, limitée aux verbes et aux formes d'origine `morphalou2` (DELA et Lefff ajoutent `disez` ou `sortissait`), avec les mêmes exclusions de temps (passé simple, subjonctif imparfait) et la même vérification Hunspell.
+
+Résultat : 8 893 formes complétées (dont 345 de Morphalou seul), 295 839 mots, 538 014 bigrammes, `main_fr.dict` de 4,1 Mo ; aucun mot retiré.
+
+## Complétion : pourquoi exclure le passé simple et le subjonctif imparfait
+
+Mesure faite en construisant le dictionnaire sans cette exclusion (Wiktionnaire et Morphalou) et en comparant au dictionnaire normal. L'exclusion ne concerne que la complétion : un passé simple attesté au moins 5 fois dans les corpus entre normalement (`fut`, `dit`, `influença`).
+
+- **Volume** : 15 012 formes de plus (8 728 au subjonctif imparfait, 6 248 au passé simple), soit 23 905 complétions au lieu de 8 893 et 92 Ko de plus pour `main_fr.dict` (+2,3 %) ; aucun mot retiré.
+- **Usage** : 86 % de ces formes n'apparaissent jamais dans les corpus (≈ 1 milliard de mots), aucune n'y dépasse 4 occurrences (`aimai`, `boucla`, `bouffa`, `cherchas`). Pour les complétions retenues, la proportion jamais vue est de 40 %.
+- **Gêne à la frappe** :
+  - 312 formes ne diffèrent d'un mot du dictionnaire que par les accents (`finît` / `finit`, `interdît` / `interdit`, `contrât` / `contrat`, `formât` / `format`, `unîtes` / `unités`, `habitât` / `habitat`) ;
+  - 944 sont à une faute de frappe (une lettre ajoutée, supprimée, remplacée ou deux lettres inversées) d'un mot de fréquence ≥ 100 (`jouas` / `jours`, `prias` / `pris`, `souvînt` / `souvent`, `permît` / `permet`, `fuisse` / `puisse`, `lût` / `lit`).
+
+Conclusion : l'exclusion est maintenue. Ces formes n'apportent presque rien et créent des concurrents inutiles aux mots courants pour la correction et les suggestions.

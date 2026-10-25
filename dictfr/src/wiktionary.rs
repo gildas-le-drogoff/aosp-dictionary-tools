@@ -85,7 +85,7 @@ pub struct Wiktionary {
     errors: FxHashSet<String>,
 }
 
-fn normalize(s: &str) -> String {
+pub fn normalize(s: &str) -> String {
     s.nfc().map(keyboard_char).collect()
 }
 

@@ -12,6 +12,7 @@ macro_rules! log {
 mod corpus;
 mod hunspell;
 mod makedict;
+mod morphalou;
 mod wiktionary;
 mod wordlist;
 
@@ -57,6 +58,7 @@ const SOURCES: [Source; 3] = [
     },
 ];
 const WIKTIONARY: &str = "wiktionnaire_fr.jsonl.gz";
+const MORPHALOU: &str = "morphalou3.1.csv.gz";
 const HUNSPELL_DICT: &str = "/usr/share/hunspell/fr_FR";
 
 const BIGRAM_HEADS: usize = 60_000;
@@ -65,7 +67,7 @@ const MIN_BIGRAM_COUNT: u64 = 5;
 const MAX_REJECTS: usize = 3000;
 const DICT_VERSION: u32 = 2;
 const DESCRIPTION: &str = "Français moderne (OpenSubtitles 2024 + presse 2022-2024 + \
-    Wikipédia 2021 + Wiktionnaire ; Hunspell Grammalecte)";
+    Wikipédia 2021 + Wiktionnaire + Morphalou ; Hunspell Grammalecte)";
 
 const USAGE: &str = "Usage :
   dictfr <dossier_sources> <dossier_listes> <dossier_sortie>   construit main_fr.dict
@@ -141,7 +143,7 @@ fn run(sources: &Path, lists: &Path, out: &Path) -> Result<(), Box<dyn Error>> {
     let files = SOURCES
         .iter()
         .flat_map(|s| s.files.iter())
-        .chain([&WIKTIONARY]);
+        .chain([&WIKTIONARY, &MORPHALOU]);
     for file in files {
         let path = sources.join(file);
         if !path.exists() {
@@ -165,6 +167,9 @@ fn run(sources: &Path, lists: &Path, out: &Path) -> Result<(), Box<dyn Error>> {
         wikt.forms.len(),
         wikt.paradigms.len()
     );
+    log!("Lecture de Morphalou…");
+    let verbs = morphalou::load_verbs(&sources.join(MORPHALOU))?;
+    log!("  {} verbes", verbs.len());
 
     let mut unigrams = Vec::new();
     for src in &SOURCES {
@@ -243,16 +248,26 @@ fn run(sources: &Path, lists: &Path, out: &Path) -> Result<(), Box<dyn Error>> {
         entries.len(),
         rejected.len()
     );
-    let completions = wordlist::complete(&entries, &wikt, &exclusions);
+    let completions =
+        wordlist::complete(&entries, wikt.paradigms.iter().chain(&verbs), &exclusions);
     let checked = hunspell::check_all(dict, &completions);
     let completions: Vec<&str> = completions
         .into_iter()
         .zip(checked)
         .filter_map(|(f, ok)| ok.then_some(f))
         .collect();
+    let from_wiktionary: FxHashSet<&str> = wikt
+        .paradigms
+        .iter()
+        .flat_map(|(_, forms)| forms.iter().map(String::as_str))
+        .collect();
     log!(
-        "{} formes fléchies ajoutées depuis le Wiktionnaire",
-        completions.len()
+        "{} formes fléchies ajoutées depuis le Wiktionnaire et Morphalou (dont {} de Morphalou seul)",
+        completions.len(),
+        completions
+            .iter()
+            .filter(|f| !from_wiktionary.contains(**f))
+            .count()
     );
 
     let mut rejects = BufWriter::new(File::create(out.join("rejets.tsv"))?);

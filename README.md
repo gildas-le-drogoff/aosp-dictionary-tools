@@ -15,7 +15,9 @@ bash dictfr/build.sh
 ```
 
 Le script télécharge les sources si elles manquent (≈ 3,5 Go dans `fr/sources/`),
-compile puis lance `dictfr`. Durée ≈ 1 min 30 sur 16 threads, 5 Go de RAM.
+compile puis lance `dictfr`. Seul Morphalou est à placer à la main : télécharger
+Morphalou 3.1 (CSV « tout en un ») sur [Ortolang](https://www.ortolang.fr/market/lexicons/morphalou)
+puis `gzip -c Morphalou3.1_CSV.csv > fr/sources/morphalou3.1.csv.gz`. Durée ≈ 1 min 30 sur 16 threads, 5 Go de RAM.
 
 Résultats dans `fr/build-rs/` :
 
@@ -54,6 +56,7 @@ de `dictfr/src/main.rs` et `dictfr/src/wordlist.rs`. Le détail des choix est da
 - Format binaire : d'après le code source d'AOSP LatinIME (`FormatSpec`,
   `BinaryDictEncoderUtils`, lecteur natif `patricia_trie_policy`), Apache 2.0
 - Wiktionnaire : extraction [kaikki.org](https://kaikki.org/) (wiktextract), CC BY-SA
+- Morphalou 3.1 : ATILF – CNRS, diffusé par [Ortolang](https://hdl.handle.net/11403/morphalou/v3.1), LGPL-LR
 - Fork de https://github.com/remi0s/aosp-dictionary-tools (dictionnaires grec et arabe)
 
 <!-- lgitea  ssh://gitea@mercury/Rust/aosp-dictionary-tools.git (fetch)

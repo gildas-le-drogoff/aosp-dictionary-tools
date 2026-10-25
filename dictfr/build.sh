@@ -15,6 +15,12 @@ for c in fra_news_2022_1M fra_news_2023_1M fra_news_2024_1M fra_wikipedia_2021_1
 	fetch "https://downloads.wortschatz-leipzig.de/corpora/$c.tar.gz" "$c.tar.gz"
 	[ -s "$SRC/$c/$c-sentences.txt" ] || tar -xzf "$SRC/$c.tar.gz" -C "$SRC" "$c/$c-sentences.txt"
 done
+if [ ! -s "$SRC/morphalou3.1.csv.gz" ]; then
+	echo "Morphalou manquant : télécharger Morphalou 3.1 (format CSV « tout en un ») sur" >&2
+	echo "https://www.ortolang.fr/market/lexicons/morphalou puis :" >&2
+	echo "  gzip -c Morphalou3.1_CSV.csv > $SRC/morphalou3.1.csv.gz" >&2
+	exit 1
+fi
 
 cargo build --release --quiet --manifest-path dictfr/Cargo.toml
 dictfr/target/release/dictfr "$SRC" fr/listes "$OUT"

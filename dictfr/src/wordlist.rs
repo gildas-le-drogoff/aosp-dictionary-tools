@@ -8,7 +8,6 @@ use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::is_combining_mark;
 
 use crate::corpus::{self, ENGLISH, FRENCH, MID, Source, TOTAL, Unigrams, is_letter};
-use crate::wiktionary::Wiktionary;
 
 pub const MAX_WORDS: usize = 300_000;
 const MIN_COUNT: u64 = 5;
@@ -436,7 +435,7 @@ pub fn select<'a>(
 
 pub fn complete<'a>(
     entries: &[Entry],
-    wiktionary: &'a Wiktionary,
+    paradigms: impl IntoIterator<Item = &'a (String, Vec<String>)>,
     exclusions: &FxHashSet<String>,
 ) -> Vec<&'a str> {
     let mut lemma_ppm: FxHashMap<&str, f64> = FxHashMap::default();
@@ -447,7 +446,7 @@ pub fn complete<'a>(
         present.insert(e.key);
     }
     let mut out: Vec<(f64, &str)> = Vec::new();
-    for (lemma, forms) in &wiktionary.paradigms {
+    for (lemma, forms) in paradigms {
         let Some(&ppm) = lemma_ppm.get(lemma.to_lowercase().as_str()) else {
             continue;
         };
