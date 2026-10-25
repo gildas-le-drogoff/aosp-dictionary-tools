@@ -1,0 +1,57 @@
+# Formes acceptées même si Hunspell et le Wiktionnaire les refusent, ou trop rares dans
+# les corpus. Une entrée par ligne ; « # » introduit un commentaire.
+# Second champ facultatif : fréquence minimale en occurrences par million (ppm), pour les
+# mots du clavier presque absents des corpus. Repères : 1 ppm ≈ f 100, 10 ppm ≈ f 125,
+# 100 ppm ≈ f 150. Les valeurs ci-dessous sont des estimations, à ajuster à l'usage.
+
+# Interjections fréquentes à l'oral, absentes du Wiktionnaire
+hey
+
+# Abréviations de SMS et de messagerie
+mdr 10
+ptdr 3
+lol 5
+stp 10
+svp 10
+bcp 5
+tkt 5
+tqt 2
+jsp 5
+jpp 2
+slt 5
+dsl 5
+cc 3
+pk 3
+pq 3
+pcq 2
+mtn 3
+ajd 2
+auj 1
+qqn 2
+qqch 2
+dac 2
+jtm 2
+bjr 3
+bsr 1
+osef 2
+askip 2
+oklm 1
+wsh 2
+frr 2
+vrmt 2
+tjrs 2
+tjs 2
+rdv 3
+msg 2
+ptn 2
+tmtc 1
+
+# Élisions familières de l'écrit spontané
+j'suis 2
+j'sais 2
+j'vais 2
+j'te 1
+j'me 1
+j'crois 1
+p'tit 2
+p'tite 2

@@ -1,0 +1,4 @@
+# Formes (ou clés en minuscules) à ne jamais inclure. « # » introduit un commentaire.
+
+# « 1 er » (premier) écrit avec une espace
+er
