@@ -55,3 +55,13 @@ pub fn check_all(dict: &Path, words: &[&str]) -> Vec<bool> {
         })
         .collect()
 }
+
+pub fn check_any(dicts: &[&str], words: &[&str]) -> Vec<bool> {
+    let mut ok = vec![false; words.len()];
+    for dict in dicts {
+        for (o, a) in ok.iter_mut().zip(check_all(Path::new(dict), words)) {
+            *o |= a;
+        }
+    }
+    ok
+}

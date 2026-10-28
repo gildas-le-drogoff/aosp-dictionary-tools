@@ -1,0 +1,2 @@
+# Forms (or lowercase keys) never to include. « # » starts a comment.
+# Lists specific to one variant: exclusions_en_US.txt, exclusions_en_GB.txt.

@@ -1,0 +1,30 @@
+# Forms accepted even if Hunspell and the Wiktionary reject them, or too rare in the
+# corpora. One entry per line; « # » starts a comment.
+# Optional second field: minimum frequency in occurrences per million (ppm), for keyboard
+# words almost absent from the corpora. Rough guide: 1 ppm ≈ f 100, 10 ppm ≈ f 125,
+# 100 ppm ≈ f 150. The values below are estimates, to be tuned with use.
+# Lists specific to one variant: ajouts_en_US.txt, ajouts_en_GB.txt.
+
+# Texting and chat abbreviations
+lol 10
+omg 5
+btw 5
+idk 5
+tbh 3
+imo 2
+lmao 3
+brb 1
+thx 2
+pls 3
+plz 1
+ok 10
+haha 5
+hahaha 2
+wtf 3
+smh 1
+ikr 1
+ttyl 1
+np 1
+jk 2
+irl 1
+fyi 2

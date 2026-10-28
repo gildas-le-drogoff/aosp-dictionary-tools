@@ -1,26 +1,33 @@
 #!/usr/bin/env bash
-# Construit fr/build-rs/main_fr.dict à partir des corpus bruts.
-# Utilisable depuis n'importe quel dossier : bash dictfr/build.sh
+# Construit <dossier>/build-rs/main_<langue>.dict pour chaque langue demandée, à partir
+# des corpus bruts téléchargés au besoin dans <dossier>/sources/.
+# Utilisable depuis n'importe quel dossier : bash dictfr/build.sh fr en_US en_GB
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-SRC=fr/sources
-OUT=fr/build-rs
-mkdir -p "$SRC" "$OUT" fr/listes
-
-fetch() { [ -s "$SRC/$2" ] || wget -q --show-progress -O "$SRC/$2" "$1"; }
-fetch https://object.pouta.csc.fi/OPUS-OpenSubtitles/v2024/mono/fr.txt.gz opensubtitles2024_fr.txt.gz
-fetch https://kaikki.org/dictionary/downloads/fr/fr-extract.jsonl.gz wiktionnaire_fr.jsonl.gz
-for c in fra_news_2022_1M fra_news_2023_1M fra_news_2024_1M fra_wikipedia_2021_1M; do
-	fetch "https://downloads.wortschatz-leipzig.de/corpora/$c.tar.gz" "$c.tar.gz"
-	[ -s "$SRC/$c/$c-sentences.txt" ] || tar -xzf "$SRC/$c.tar.gz" -C "$SRC" "$c/$c-sentences.txt"
-done
-if [ ! -s "$SRC/morphalou3.1.csv.gz" ]; then
-	echo "Morphalou manquant : télécharger Morphalou 3.1 (format CSV « tout en un ») sur" >&2
-	echo "https://www.ortolang.fr/market/lexicons/morphalou puis :" >&2
-	echo "  gzip -c Morphalou3.1_CSV.csv > $SRC/morphalou3.1.csv.gz" >&2
-	exit 1
+cargo build --release --quiet --manifest-path dictfr/Cargo.toml
+BIN=dictfr/target/release/dictfr
+if [ $# -eq 0 ]; then
+	"$BIN"
 fi
 
-cargo build --release --quiet --manifest-path dictfr/Cargo.toml
-dictfr/target/release/dictfr "$SRC" fr/listes "$OUT"
+for lang; do
+	list=$("$BIN" sources "$lang")
+	while IFS=$'\t' read -r url dest extra; do
+		src=$(dirname "$dest")
+		mkdir -p "$src"
+		if [ "$url" = - ]; then
+			if [ ! -s "$dest" ]; then
+				echo "Source manquante : $dest" >&2
+				echo "$extra" >&2
+				exit 1
+			fi
+			continue
+		fi
+		[ -s "$dest" ] || wget -q --show-progress -O "$dest" "$url"
+		if [ "$extra" != - ] && [ ! -s "$src/$extra" ]; then
+			tar -xzf "$dest" -C "$src" "$extra"
+		fi
+	done <<<"$list"
+	"$BIN" build "$lang"
+done

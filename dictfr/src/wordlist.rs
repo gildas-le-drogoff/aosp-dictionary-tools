@@ -7,18 +7,17 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::is_combining_mark;
 
-use crate::corpus::{self, ENGLISH, FRENCH, MID, Source, TOTAL, Unigrams, is_letter};
+use crate::corpus::{self, FOREIGN, MID, NATIVE, Source, TOTAL, Unigrams, is_letter};
 
 pub const MAX_WORDS: usize = 300_000;
 const MIN_COUNT: u64 = 5;
 const MAX_CANDIDATES: usize = 700_000;
 const CASE_SHARE: f64 = 0.25;
-const ONE_LETTER: &[&str] = &["a", "à", "y", "ô"];
 const MAX_LEN: usize = 30;
 
 pub const VARIANTS_CHECKED: usize = 3;
 
-const MAX_ENGLISH_SHARE: f64 = 0.5;
+const MAX_FOREIGN_SHARE: f64 = 0.5;
 
 const MIN_LANGUAGE_EVIDENCE: u64 = 20;
 
@@ -48,9 +47,10 @@ pub struct KeyStats {
 }
 
 impl KeyStats {
-    fn french_enough(&self) -> bool {
-        let [fr, en] = self.lang;
-        fr + en < MIN_LANGUAGE_EVIDENCE || en as f64 <= MAX_ENGLISH_SHARE * (fr + en) as f64
+    fn native_enough(&self) -> bool {
+        let [native, foreign] = self.lang;
+        native + foreign < MIN_LANGUAGE_EVIDENCE
+            || foreign as f64 <= MAX_FOREIGN_SHARE * (native + foreign) as f64
     }
 }
 
@@ -137,8 +137,8 @@ pub fn merge_sources(
             stats.ppm[i] += ppm;
             stats.raw += n[TOTAL];
             stats.per_source[i] += n[TOTAL];
-            stats.lang[0] += n[FRENCH];
-            stats.lang[1] += n[ENGLISH];
+            stats.lang[0] += n[NATIVE];
+            stats.lang[1] += n[FOREIGN];
             let mid = if n[MID] > 0 {
                 n[MID] as f64
             } else {
@@ -180,13 +180,14 @@ pub fn candidates<'a>(
     keys: &'a Keys,
     additions: &FxHashMap<String, f64>,
     exclusions: &FxHashSet<String>,
+    one_letter: &[&str],
 ) -> Vec<&'a str> {
     let added: FxHashSet<String> = additions.keys().map(|a| a.to_lowercase()).collect();
     let eligible = |key: &str| {
         let len = key.chars().count();
         is_word(key)
             && len <= MAX_LEN
-            && (len > 1 || ONE_LETTER.contains(&key))
+            && (len > 1 || one_letter.contains(&key))
             && !exclusions.contains(key)
     };
     let mut c: Vec<(&str, f64)> = keys
@@ -218,16 +219,19 @@ pub struct Validation {
     pub accepted: Vec<(String, &'static str, f64)>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn validate<'a>(
     keys: &'a Keys,
     candidates: &[&'a str],
     hunspell: &FxHashSet<&str>,
+    rival: &FxHashSet<&str>,
     wiktionary: &FxHashSet<String>,
     sources: &[Source],
     additions: &FxHashMap<String, f64>,
     exclusions: &FxHashSet<String>,
 ) -> Validation {
     let allowed = |f: &str| !exclusions.contains(f);
+    let fallback = |f: &str| allowed(f) && !rival.contains(f);
     let mut valid: FxHashSet<String> = FxHashSet::default();
     let mut has_valid: FxHashSet<&str> = FxHashSet::default();
     for &key in candidates {
@@ -262,11 +266,11 @@ pub fn validate<'a>(
             }
             continue;
         }
-        let french = stats.french_enough();
+        let native = stats.native_enough();
         let from_wiktionary: Vec<&str> = checked_forms(key, stats)
-            .filter(|f| !valid.contains(*f) && wiktionary.contains(*f) && allowed(f))
+            .filter(|f| !valid.contains(*f) && wiktionary.contains(*f) && fallback(f))
             .collect();
-        if french && !from_wiktionary.is_empty() {
+        if native && !from_wiktionary.is_empty() {
             for f in from_wiktionary {
                 valid.insert(f.to_owned());
                 accepted.push((f.to_owned(), "wiktionnaire", stats.score));
@@ -285,8 +289,8 @@ pub fn validate<'a>(
             && best.chars().any(char::is_uppercase)
             && *v >= PROPER_NOUN_SHARE * total
             && edited.iter().map(|&i| stats.per_source[i]).sum::<u64>() >= PROPER_NOUN_MIN_COUNT
-            && french
-            && allowed(best)
+            && native
+            && fallback(best)
         {
             valid.insert(best.clone());
             accepted.push((best.clone(), "nom propre", stats.score));

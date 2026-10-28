@@ -12,6 +12,8 @@ use rayon::prelude::*;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use unicode_normalization::{IsNormalized, UnicodeNormalization, is_nfc_quick};
 
+use crate::lang::Lang;
+
 pub struct Source {
     pub name: &'static str,
 
@@ -30,8 +32,8 @@ pub const TOTAL: usize = 0;
 
 pub const MID: usize = 1;
 
-pub const FRENCH: usize = 2;
-pub const ENGLISH: usize = 3;
+pub const NATIVE: usize = 2;
+pub const FOREIGN: usize = 3;
 pub type Counts = [u64; 4];
 
 pub type Unigrams = FxHashMap<String, Counts>;
@@ -43,16 +45,6 @@ const SHARDS: usize = 256;
 const SENTENCE_START: &[char] = &['.', '!', '?', '…', ':', '«', '"', '—', '-'];
 
 const DEDUP_MIN_WORDS: usize = 8;
-
-const FRENCH_MARKERS: &[&str] = &[
-    "de", "la", "le", "les", "et", "des", "est", "que", "pas", "je", "il", "une", "du", "qui",
-    "ne", "à", "pour", "dans", "c'est", "vous", "tu", "nous", "mais", "avec", "suis", "elle", "ça",
-    "j'ai", "sur", "au", "sont", "très", "tout", "bien", "oui", "moi", "toi", "rien",
-];
-const ENGLISH_MARKERS: &[&str] = &[
-    "the", "and", "you", "of", "is", "to", "my", "it's", "i'm", "don't", "that", "with", "your",
-    "what", "this", "are", "was", "be", "for", "have", "we", "just", "know", "can't",
-];
 
 pub fn is_letter(c: char) -> bool {
     c.is_alphabetic() && !c.is_numeric()
@@ -223,27 +215,6 @@ fn tokens<'a>(s: &'a str, mut f: impl FnMut(Token<'a>)) {
     }
 }
 
-fn ocr_fix(w: &str, initial: bool, subtitles: bool) -> &str {
-    match w {
-        "Ie" => "le",
-        "ie" => "je",
-        "ies" => "les",
-        "Ia" => "la",
-        "Ies" => "les",
-        "Iui" => "lui",
-        "Ià" => "là",
-        "Ieur" => "leur",
-        "Ieurs" => "leurs",
-        "ll" if initial => "Il",
-        "ll" => "il",
-        "lls" if initial => "Ils",
-        "lls" => "ils",
-        "IIs" => "Ils",
-        "II" if initial || subtitles => "Il",
-        _ => w,
-    }
-}
-
 fn is_marker(word: &str, list: &[&str]) -> bool {
     word.len() <= 6
         && list
@@ -357,7 +328,7 @@ fn merge_unigrams(mut a: Unigrams, mut b: Unigrams) -> Unigrams {
     a
 }
 
-pub fn count_unigrams(dir: &Path, src: &Source) -> io::Result<Unigrams> {
+pub fn count_unigrams(dir: &Path, src: &Source, lang: &Lang) -> io::Result<Unigrams> {
     let seen = Seen::new();
     let mut total = Unigrams::default();
     for file in src.files {
@@ -372,24 +343,25 @@ pub fn count_unigrams(dir: &Path, src: &Source) -> io::Result<Unigrams> {
                 for line in sentences(chunk, src, &seen) {
                     let text = clean(line, &mut buf);
                     words.clear();
-                    let (mut fr, mut en) = (0, 0);
+                    let (mut native, mut foreign) = (0, 0);
                     let mut initial = true;
                     tokens(text, |tok| match tok {
                         Token::Other(c) => initial |= SENTENCE_START.contains(&c),
                         Token::Word(w) => {
-                            fr += usize::from(is_marker(w, FRENCH_MARKERS));
-                            en += usize::from(is_marker(w, ENGLISH_MARKERS));
+                            native += usize::from(is_marker(w, lang.markers.words));
+                            foreign += usize::from(is_marker(w, lang.foreign.words));
                             let start = w.as_ptr() as usize - text.as_ptr() as usize;
                             words.push((start, start + w.len(), initial));
                             initial = false;
                         }
                     });
-                    let (is_fr, is_en) = (u64::from(fr > en), u64::from(en > fr));
+                    let is_native = u64::from(native > foreign);
+                    let is_foreign = u64::from(foreign > native);
 
                     let shouting = words.len() >= 3 && !text.chars().any(char::is_lowercase);
                     for &(start, end, initial) in &words {
-                        let w = ocr_fix(&text[start..end], initial, !src.edited);
-                        let add = [1, u64::from(!initial && !shouting), is_fr, is_en];
+                        let w = (lang.ocr_fix)(&text[start..end], initial, !src.edited);
+                        let add = [1, u64::from(!initial && !shouting), is_native, is_foreign];
                         match uni.get_mut(w) {
                             Some(n) => {
                                 for i in 0..n.len() {
@@ -414,6 +386,7 @@ pub fn count_unigrams(dir: &Path, src: &Source) -> io::Result<Unigrams> {
 pub fn count_bigrams(
     dir: &Path,
     src: &Source,
+    lang: &Lang,
     ids: &FxHashMap<&str, u32>,
     heads: u32,
 ) -> io::Result<FxHashMap<u64, u64>> {
@@ -432,11 +405,15 @@ pub fn count_bigrams(
                     tokens(clean(line, &mut buf), |tok| {
                         let cur = match tok {
                             Token::Other(_) => None,
-                            Token::Word(w) if w.chars().any(char::is_uppercase) => {
-                                let w = ocr_fix(w, true, !src.edited);
-                                ids.get(w.to_lowercase().as_str()).copied()
+                            Token::Word(w) => {
+                                let upper = w.chars().any(char::is_uppercase);
+                                let w = (lang.ocr_fix)(w, upper, !src.edited);
+                                if w.chars().any(char::is_uppercase) {
+                                    ids.get(w.to_lowercase().as_str()).copied()
+                                } else {
+                                    ids.get(w).copied()
+                                }
                             }
-                            Token::Word(w) => ids.get(ocr_fix(w, false, !src.edited)).copied(),
                         };
                         if let (Some(a), Some(b)) = (prev, cur)
                             && a < heads
@@ -521,9 +498,10 @@ mod tests {
 
     #[test]
     fn markers() {
-        assert!(is_marker("De", FRENCH_MARKERS));
-        assert!(is_marker("Ça", FRENCH_MARKERS));
-        assert!(is_marker("THE", ENGLISH_MARKERS));
-        assert!(!is_marker("thé", ENGLISH_MARKERS));
+        use crate::lang::{en, fr};
+        assert!(is_marker("De", fr::FR.markers.words));
+        assert!(is_marker("Ça", fr::FR.markers.words));
+        assert!(is_marker("THE", en::MARKERS.words));
+        assert!(!is_marker("thé", en::MARKERS.words));
     }
 }

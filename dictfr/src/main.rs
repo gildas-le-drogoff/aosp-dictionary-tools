@@ -11,6 +11,7 @@ macro_rules! log {
 
 mod corpus;
 mod hunspell;
+mod lang;
 mod makedict;
 mod morphalou;
 mod wiktionary;
@@ -24,53 +25,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use corpus::Source;
+use lang::{Download, Lang};
 use wordlist::{to_bigram_freq, to_freq};
-
-const SOURCES: [Source; 3] = [
-    Source {
-        name: "os2024",
-        files: &["opensubtitles2024_fr.txt.gz"],
-        leipzig: false,
-        weight: 0.50,
-        dedup: true,
-        edited: false,
-    },
-    Source {
-        name: "news",
-        files: &[
-            "fra_news_2022_1M/fra_news_2022_1M-sentences.txt",
-            "fra_news_2023_1M/fra_news_2023_1M-sentences.txt",
-            "fra_news_2024_1M/fra_news_2024_1M-sentences.txt",
-        ],
-        leipzig: true,
-        weight: 0.35,
-        dedup: false,
-        edited: true,
-    },
-    Source {
-        name: "wiki2021",
-        files: &["fra_wikipedia_2021_1M/fra_wikipedia_2021_1M-sentences.txt"],
-        leipzig: true,
-        weight: 0.15,
-        dedup: false,
-        edited: true,
-    },
-];
-const WIKTIONARY: &str = "wiktionnaire_fr.jsonl.gz";
-const MORPHALOU: &str = "morphalou3.1.csv.gz";
-const HUNSPELL_DICT: &str = "/usr/share/hunspell/fr_FR";
 
 const BIGRAM_HEADS: usize = 60_000;
 const BIGRAMS_PER_WORD: usize = 12;
 const MIN_BIGRAM_COUNT: u64 = 5;
 const MAX_REJECTS: usize = 3000;
 const DICT_VERSION: u32 = 2;
-const DESCRIPTION: &str = "Français moderne (OpenSubtitles 2024 + presse 2022-2024 + \
-    Wikipédia 2021 + Wiktionnaire + Morphalou ; Hunspell Grammalecte)";
-
 const USAGE: &str = "Usage :
-  dictfr <dossier_sources> <dossier_listes> <dossier_sortie>   construit main_fr.dict
+  dictfr build <langue> [<racine>]                             construit <dossier>/build-rs/main_<langue>.dict
+  dictfr sources <langue>                                      liste les sources à télécharger
   dictfr makedict [--table] <entrée.combined> <sortie.dict>    compile une liste combined
   dictfr dump <entrée.dict> [<sortie.combined>]                décompile un dictionnaire";
 
@@ -85,15 +50,33 @@ fn main() {
         }
         ["dump", input] => dump_file(Path::new(input), None),
         ["dump", input, output] => dump_file(Path::new(input), Some(Path::new(output))),
-        [sources, lists, out] => run(Path::new(sources), Path::new(lists), Path::new(out)),
+        ["build", code] => language(code).and_then(|l| run(l, Path::new("."))),
+        ["build", code, root] => language(code).and_then(|l| run(l, Path::new(root))),
+        ["sources", code] => language(code).map(print_sources),
         _ => {
-            eprintln!("{USAGE}");
+            eprintln!("{USAGE}\n\nLangues : {}", lang::codes());
             std::process::exit(2);
         }
     };
     if let Err(e) = result {
         eprintln!("Erreur : {e}");
         std::process::exit(1);
+    }
+}
+
+fn language(code: &str) -> Result<&'static Lang, Box<dyn Error>> {
+    lang::find(code)
+        .ok_or_else(|| format!("langue inconnue : {code} (connues : {})", lang::codes()).into())
+}
+
+fn print_sources(lang: &Lang) {
+    let dir = Path::new(lang.dir).join("sources");
+    for d in lang.downloads {
+        let (url, file, extra) = match d {
+            Download::Url { url, file, member } => (*url, *file, member.unwrap_or("-")),
+            Download::Manual { file, how } => ("-", *file, *how),
+        };
+        println!("{url}\t{}\t{extra}", dir.join(file).display());
     }
 }
 
@@ -131,28 +114,44 @@ fn dump_file(input: &Path, output: Option<&Path>) -> Result<(), Box<dyn Error>> 
     Ok(())
 }
 
-fn run(sources: &Path, lists: &Path, out: &Path) -> Result<(), Box<dyn Error>> {
-    let dict = Path::new(HUNSPELL_DICT);
-    for ext in ["aff", "dic"] {
-        if !dict.with_extension(ext).exists() {
-            return Err(
-                format!("dictionnaire Hunspell introuvable : {HUNSPELL_DICT}.{ext}").into(),
-            );
+fn run(lang: &Lang, root: &Path) -> Result<(), Box<dyn Error>> {
+    let dir = root.join(lang.dir);
+    let (sources, lists, out) = (
+        dir.join("sources"),
+        dir.join("listes"),
+        dir.join("build-rs"),
+    );
+    let code = lang.code;
+    for dict in lang.hunspell.iter().chain(lang.rival_hunspell) {
+        for ext in ["aff", "dic"] {
+            if !Path::new(&format!("{dict}.{ext}")).exists() {
+                return Err(format!("dictionnaire Hunspell introuvable : {dict}.{ext}").into());
+            }
         }
     }
-    let files = SOURCES
+    let files = lang
+        .sources
         .iter()
         .flat_map(|s| s.files.iter())
-        .chain([&WIKTIONARY, &MORPHALOU]);
+        .chain([&lang.wiktionary.file])
+        .chain(lang.lexicon.as_ref().map(|l| &l.file));
     for file in files {
         let path = sources.join(file);
         if !path.exists() {
             return Err(format!("source introuvable : {}", path.display()).into());
         }
     }
-    fs::create_dir_all(out)?;
-    let additions = wordlist::read_additions(&lists.join("ajouts.txt"))?;
-    let exclusions = wordlist::read_list(&lists.join("exclusions.txt"))?;
+    fs::create_dir_all(&out)?;
+    let mut additions = wordlist::read_additions(&lists.join("ajouts.txt"))?;
+    let mut exclusions = wordlist::read_list(&lists.join("exclusions.txt"))?;
+    if code != lang.dir {
+        additions.extend(wordlist::read_additions(
+            &lists.join(format!("ajouts_{code}.txt")),
+        )?);
+        exclusions.extend(wordlist::read_list(
+            &lists.join(format!("exclusions_{code}.txt")),
+        )?);
+    }
     log!(
         "{} threads ; {} ajouts, {} exclusions",
         rayon::current_num_threads(),
@@ -161,29 +160,35 @@ fn run(sources: &Path, lists: &Path, out: &Path) -> Result<(), Box<dyn Error>> {
     );
 
     log!("Lecture du Wiktionnaire…");
-    let wikt = wiktionary::load(&sources.join(WIKTIONARY))?;
+    let wikt = wiktionary::load(&sources.join(lang.wiktionary.file), &lang.wiktionary)?;
     log!(
         "  {} formes, {} lemmes fléchis",
         wikt.forms.len(),
         wikt.paradigms.len()
     );
-    log!("Lecture de Morphalou…");
-    let verbs = morphalou::load_verbs(&sources.join(MORPHALOU))?;
-    log!("  {} verbes", verbs.len());
+    let lexicon = match &lang.lexicon {
+        Some(lex) => {
+            log!("Lecture de {}…", lex.name);
+            let paradigms = (lex.load)(&sources.join(lex.file))?;
+            log!("  {} lemmes fléchis", paradigms.len());
+            paradigms
+        }
+        None => Vec::new(),
+    };
 
     let mut unigrams = Vec::new();
-    for src in &SOURCES {
+    for src in lang.sources {
         log!("Comptage des mots : {}…", src.name);
-        let uni = corpus::count_unigrams(sources, src)?;
+        let uni = corpus::count_unigrams(&sources, src, lang)?;
         let total: u64 = uni.values().map(|n| n[corpus::TOTAL]).sum();
         log!("  {} : {total} occurrences, {} formes", src.name, uni.len());
         unigrams.push(uni);
     }
-    let mut keys = wordlist::merge_sources(&SOURCES, unigrams, &additions);
+    let mut keys = wordlist::merge_sources(lang.sources, unigrams, &additions);
     log!("{} clés (formes en minuscules)", keys.len());
 
     let validation = {
-        let candidates = wordlist::candidates(&keys, &additions, &exclusions);
+        let candidates = wordlist::candidates(&keys, &additions, &exclusions, lang.one_letter);
         let mut to_check = FxHashSet::default();
         for &key in &candidates {
             to_check.extend(wordlist::checked_forms(key, &keys[key]));
@@ -191,19 +196,37 @@ fn run(sources: &Path, lists: &Path, out: &Path) -> Result<(), Box<dyn Error>> {
         let mut to_check: Vec<&str> = to_check.into_iter().collect();
         to_check.sort_unstable();
         log!("Hunspell : vérification de {} formes…", to_check.len());
-        let accepted = hunspell::check_all(dict, &to_check);
+        let accepted = hunspell::check_any(lang.hunspell, &to_check);
         let hun: FxHashSet<&str> = to_check
             .iter()
             .zip(accepted)
             .filter_map(|(w, ok)| ok.then_some(*w))
             .collect();
         log!("  {} formes acceptées par Hunspell", hun.len());
+        let others: Vec<&str> = to_check
+            .iter()
+            .filter(|w| !hun.contains(**w))
+            .copied()
+            .collect();
+        let rival: FxHashSet<&str> = if lang.rival_hunspell.is_empty() {
+            FxHashSet::default()
+        } else {
+            let accepted = hunspell::check_any(lang.rival_hunspell, &others);
+            let rival: FxHashSet<&str> = others
+                .iter()
+                .zip(accepted)
+                .filter_map(|(w, ok)| ok.then_some(*w))
+                .collect();
+            log!("  {} formes propres à la variante concurrente", rival.len());
+            rival
+        };
         wordlist::validate(
             &keys,
             &candidates,
             &hun,
+            &rival,
             &wikt.forms,
-            &SOURCES,
+            lang.sources,
             &additions,
             &exclusions,
         )
@@ -216,7 +239,7 @@ fn run(sources: &Path, lists: &Path, out: &Path) -> Result<(), Box<dyn Error>> {
         by_reason("nom propre"),
         validation.folds.len()
     );
-    let mut report = BufWriter::new(File::create(out.join("rattachements.tsv"))?);
+    let mut report = BufWriter::new(File::create(out.join(format!("{code}_rattachements.tsv")))?);
     writeln!(report, "graphie\tcible\tppm")?;
     for (src, dst) in &validation.folds {
         writeln!(report, "{src}\t{dst}\t{:.3}", keys[src].score)?;
@@ -225,16 +248,17 @@ fn run(sources: &Path, lists: &Path, out: &Path) -> Result<(), Box<dyn Error>> {
     wordlist::apply_folds(&mut keys, &validation.folds);
     let mut accepted = validation.accepted.clone();
     accepted.sort_by(|a, b| b.2.total_cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
-    let mut report = BufWriter::new(File::create(out.join("admis.tsv"))?);
+    let mut report = BufWriter::new(File::create(out.join(format!("{code}_admis.tsv")))?);
     writeln!(report, "forme\traison\tppm")?;
     for (form, reason, ppm) in &accepted {
         writeln!(report, "{form}\t{reason}\t{ppm:.3}")?;
     }
     report.flush()?;
 
-    let candidates = wordlist::candidates(&keys, &additions, &exclusions);
+    let candidates = wordlist::candidates(&keys, &additions, &exclusions, lang.one_letter);
     let valid: FxHashSet<&str> = validation.valid.iter().map(String::as_str).collect();
-    let (entries, rejected) = wordlist::select(&keys, &candidates, &valid, &SOURCES, &additions);
+    let (entries, rejected) =
+        wordlist::select(&keys, &candidates, &valid, lang.sources, &additions);
     let (Some(first), Some(last)) = (entries.first(), entries.last()) else {
         return Err("aucun mot retenu".into());
     };
@@ -249,8 +273,8 @@ fn run(sources: &Path, lists: &Path, out: &Path) -> Result<(), Box<dyn Error>> {
         rejected.len()
     );
     let completions =
-        wordlist::complete(&entries, wikt.paradigms.iter().chain(&verbs), &exclusions);
-    let checked = hunspell::check_all(dict, &completions);
+        wordlist::complete(&entries, wikt.paradigms.iter().chain(&lexicon), &exclusions);
+    let checked = hunspell::check_any(lang.hunspell, &completions);
     let completions: Vec<&str> = completions
         .into_iter()
         .zip(checked)
@@ -261,18 +285,32 @@ fn run(sources: &Path, lists: &Path, out: &Path) -> Result<(), Box<dyn Error>> {
         .iter()
         .flat_map(|(_, forms)| forms.iter().map(String::as_str))
         .collect();
-    log!(
-        "{} formes fléchies ajoutées depuis le Wiktionnaire et Morphalou (dont {} de Morphalou seul)",
-        completions.len(),
-        completions
-            .iter()
-            .filter(|f| !from_wiktionary.contains(**f))
-            .count()
-    );
+    match &lang.lexicon {
+        Some(lex) => log!(
+            "{} formes fléchies ajoutées depuis le Wiktionnaire et {} (dont {} de {} seul)",
+            completions.len(),
+            lex.name,
+            completions
+                .iter()
+                .filter(|f| !from_wiktionary.contains(**f))
+                .count(),
+            lex.name
+        ),
+        None => log!(
+            "{} formes fléchies ajoutées depuis le Wiktionnaire",
+            completions.len()
+        ),
+    }
 
-    let mut rejects = BufWriter::new(File::create(out.join("rejets.tsv"))?);
-    let names: Vec<&str> = SOURCES.iter().map(|s| s.name).collect();
-    writeln!(rejects, "clé\tppm\tformes\t{}\tfr\ten", names.join("\t"))?;
+    let mut rejects = BufWriter::new(File::create(out.join(format!("{code}_rejets.tsv")))?);
+    let names: Vec<&str> = lang.sources.iter().map(|s| s.name).collect();
+    writeln!(
+        rejects,
+        "clé\tppm\tformes\t{}\t{}\t{}",
+        names.join("\t"),
+        lang.markers.code,
+        lang.foreign.code
+    )?;
     for &key in rejected.iter().take(MAX_REJECTS) {
         let stats = &keys[key];
         let forms: Vec<&str> = stats
@@ -316,9 +354,9 @@ fn run(sources: &Path, lists: &Path, out: &Path) -> Result<(), Box<dyn Error>> {
     let heads = order.len().min(BIGRAM_HEADS) as u32;
 
     let mut pairs: FxHashMap<u64, (f64, u64)> = FxHashMap::default();
-    for (i, src) in SOURCES.iter().enumerate() {
+    for (i, src) in lang.sources.iter().enumerate() {
         log!("Comptage des bigrammes : {}…", src.name);
-        let counts = corpus::count_bigrams(sources, src, &ids, heads)?;
+        let counts = corpus::count_bigrams(&sources, src, lang, &ids, heads)?;
         log!("  {} : {} bigrammes distincts", src.name, counts.len());
         for (k, n) in counts {
             let a = order[(k >> 32) as usize];
@@ -346,9 +384,9 @@ fn run(sources: &Path, lists: &Path, out: &Path) -> Result<(), Box<dyn Error>> {
     let date = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let mut dict = makedict::Dict {
         attributes: [
-            ("dictionary", "main:fr".to_owned()),
-            ("locale", "fr".to_owned()),
-            ("description", DESCRIPTION.to_owned()),
+            ("dictionary", format!("main:{}", code.to_lowercase())),
+            ("locale", code.to_owned()),
+            ("description", lang.description.to_owned()),
             ("date", date.to_string()),
             ("version", DICT_VERSION.to_string()),
         ]
@@ -382,12 +420,12 @@ fn run(sources: &Path, lists: &Path, out: &Path) -> Result<(), Box<dyn Error>> {
             ..Default::default()
         });
     }
-    let path = out.join("fr_wordlist.combined");
+    let path = out.join(format!("{code}_wordlist.combined"));
     fs::write(&path, makedict::write_combined(&dict))?;
     log!(
         "{} mots et {bigram_total} bigrammes écrits dans {}",
         dict.words.len(),
         path.display()
     );
-    write_dict(&dict, &out.join("main_fr.dict"), false)
+    write_dict(&dict, &out.join(format!("main_{code}.dict")), false)
 }
